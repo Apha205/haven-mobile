@@ -22,30 +22,30 @@ class PayloadMergeTest {
     private fun hexPayload(json: String): String =
         "0x" + json.toByteArray(Charsets.UTF_8).joinToString("") { "%02x".format(it.toInt() and 0xFF) }
 
-    private fun attr(name: String, type: String, value: Any) =
-        JSONObject().put("name", name).put("type", type).put("value", value)
+    private fun attr(type: String, value: Any) =
+        JSONObject().put("type", type).put("value", value)
 
     /** The real `tiny` upload shape: gates in attributes, locators and sealed gates in payload. */
     private fun tinyRow(payloadJson: String, gateType: Int = 1): JSONObject = JSONObject()
-        .put("key", "0x" + "ab".repeat(32))
-        .put("owner", "0xOwner")
-        .put("creator", "0xOwner")
-        .put("createdAt", "0x9b877")
-        .put("expiresAt", "0x1c2d77")
-        .put("contentType", "application/json")
+        .put("${'$'}key", "0x" + "ab".repeat(32))
+        .put("${'$'}owner", "0xOwner")
+        .put("${'$'}creator", "0xOwner")
+        .put("${'$'}createdAt", "0x9b877")
+        .put("${'$'}expiresAt", "0x1c2d77")
+        .put("content_type", "application/json")
         .put("payload", hexPayload(payloadJson))
         .put(
-            "attributes",
-            JSONArray()
-                .put(attr("title", "str", "tiny"))
-                .put(attr("dur_s", "i32", 2))
-                .put(attr("mime", "i32", 1))
-                .put(attr("gate_chain", "i32", 11155111))
-                .put(attr("gate_token", "str", "0xtoken"))
-                .put(attr("gate_threshold", "i32", 1))
-                .put(attr("gate_type", "i32", gateType))
-                .put(attr("grp", "str", "haven.video.full"))
-                .put(attr("sha256_ct", "str", "abc123")),
+            "${'$'}attributes",
+            JSONObject()
+                .put("title", attr("str", "tiny"))
+                .put("dur_s", attr("i32", 2))
+                .put("mime", attr("i32", 1))
+                .put("gate_chain", attr("i32", 11155111))
+                .put("gate_token", attr("str", "0xtoken"))
+                .put("gate_threshold", attr("i32", 1))
+                .put("gate_type", attr("i32", gateType))
+                .put("grp", attr("str", "haven.video.full"))
+                .put("sha256_ct", attr("str", "abc123")),
         )
 
     private fun sealedGate(version: Any = 1) = JSONObject()
@@ -97,24 +97,24 @@ class PayloadMergeTest {
         // fallback the item resolved mimeType null, extension null, kind
         // FILE, and never reached the audio player.
         val row = JSONObject()
-            .put("key", "0x" + "e6".repeat(32))
-            .put("owner", "0xOwner")
-            .put("creator", "0xOwner")
-            .put("contentType", "application/json")
+            .put("${'$'}key", "0x" + "e6".repeat(32))
+            .put("${'$'}owner", "0xOwner")
+            .put("${'$'}creator", "0xOwner")
+            .put("content_type", "application/json")
             .put("payload", hexPayload(JSONObject()
                 .put("name", "test_band_test_album_1971.released.mp3.enc")
                 .put("ct", "audio/mpeg")
                 .put("piece", "bafkpiece")
                 .put("gate", sealedGate())
                 .toString()))
-            .put("attributes", JSONArray()
-                .put(attr("title", "str", "Test Band - Test Album (1971) [DE]"))
-                .put(attr("gate_chain", "i32", 11155111))
-                .put(attr("gate_token", "str", "0xtoken"))
-                .put(attr("gate_threshold", "str", "1000000000000000000"))
-                .put(attr("gate_type", "i32", 3))
-                .put(attr("grp", "str", "haven.audio.full"))
-                .put(attr("sha256_ct", "str", "abc123")))
+            .put("${'$'}attributes", JSONObject()
+                .put("title", attr("str", "Test Band - Test Album (1971) [DE]"))
+                .put("gate_chain", attr("i32", 11155111))
+                .put("gate_token", attr("str", "0xtoken"))
+                .put("gate_threshold", attr("str", "1000000000000000000"))
+                .put("gate_type", attr("i32", 3))
+                .put("grp", attr("str", "haven.audio.full"))
+                .put("sha256_ct", attr("str", "abc123")))
         val item = with(client) { normalizeRpcEntity(row).toMediaItem() }
 
         assertEquals("audio/mpeg", item.mimeType)

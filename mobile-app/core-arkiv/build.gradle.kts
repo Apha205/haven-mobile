@@ -20,7 +20,7 @@ android {
 
     defaultConfig {
         // Arkiv chain JSON-RPC URL, blank unless overridden in local.properties. A blank
-        // BuildConfig falls back to the Tiramisu default in ArkivDiModule, so every build
+        // BuildConfig falls back to the Rabdi default in ArkivDiModule, so every build
         // can reach the chain; the client's "not configured" path only triggers on an
         // explicitly blank ArkivConfig (e.g. tests).
         buildConfigField(

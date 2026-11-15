@@ -5,7 +5,7 @@ import cloud.filecoin.foc.cache.FocChain
 /**
  * Arkiv connection settings.
  *
- * [endpointUrl] is the chain's JSON-RPC URL (Tiramisu by default), queried directly with
+ * [endpointUrl] is the chain's JSON-RPC URL (Rabdi by default), queried directly with
  * `arkiv_query` — there is no REST gateway in front of Arkiv. Production DI always supplies
  * a value (see `ArkivDiModule`); a blank URL only ever means "explicitly unconfigured",
  * never "offline" — offline is no connectivity at call time.
@@ -13,7 +13,7 @@ import cloud.filecoin.foc.cache.FocChain
  * [focChain] is the Filecoin network pieces from this Arkiv endpoint live on. It is the
  * app-wide default for retrieval; a record's gate can override it per record (see
  * `ArkivClientImpl.resolveFocChain`). Left null, it is inferred from [endpointUrl]:
- * a testnet endpoint (Tiramisu) means calibration, anything else mainnet.
+ * a testnet endpoint (Rabdi) means calibration, anything else mainnet.
  */
 data class ArkivConfig(
     val endpointUrl: String,

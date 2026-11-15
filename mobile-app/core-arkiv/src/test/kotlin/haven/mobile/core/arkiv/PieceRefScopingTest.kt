@@ -97,9 +97,9 @@ class PieceRefScopingTest {
     @Test
     fun `missing gate infers calibration from a testnet arkiv endpoint`() {
         // Ungated records carry no gate signal. The network follows the Arkiv
-        // endpoint: Tiramisu (testnet) means Filecoin calibration.
+        // endpoint: Rabdi (testnet) means Filecoin calibration.
         val testnetClient = ArkivClientImpl(
-            ArkivConfig(endpointUrl = "https://rpc.tiramisu.db-chain.testnet.arkiv.network"),
+            ArkivConfig(endpointUrl = "https://rpc.rabdi.db-chain.testnet.arkiv.network"),
         )
         val ref = with(testnetClient) {
             normalizeRpcEntity(row("0x5C32469325d4093AB142dDDC1305F91d76e45141", null, payload()))

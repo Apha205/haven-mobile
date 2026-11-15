@@ -25,8 +25,8 @@ haven.aol.icHost=https://ic0.app
 
 # ── Arkiv chain ──────────────────────────────────────────────────────────────────────────────
 # JSON-RPC URL of the Arkiv chain, queried directly with `arkiv_query` (same as the dapp's
-# @arkiv-network/sdk). This is an OVERRIDE ONLY: left blank, the app uses the Tiramisu
-# default (https://rpc.tiramisu.db-chain.testnet.arkiv.network), same as haven-dapp and
+# @arkiv-network/sdk). This is an OVERRIDE ONLY: left blank, the app uses the Rabdi
+# default (https://rpc.rabdi.db-chain.testnet.arkiv.network), same as haven-dapp and
 # haven-cli. Set it only to point at a different chain.
 # Surfaces as BuildConfig.ARKIV_ENDPOINT_URL in :core-arkiv.
 arkiv.endpointUrl=
