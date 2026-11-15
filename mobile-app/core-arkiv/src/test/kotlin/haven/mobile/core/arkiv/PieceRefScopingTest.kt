@@ -1,7 +1,6 @@
 package haven.mobile.core.arkiv
 
 import cloud.filecoin.foc.cache.FocChain
-import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -25,28 +24,29 @@ class PieceRefScopingTest {
     private fun hexPayload(json: String): String =
         "0x" + json.toByteArray(Charsets.UTF_8).joinToString("") { "%02x".format(it.toInt() and 0xFF) }
 
-    private fun attr(name: String, type: String, value: Any) =
-        JSONObject().put("name", name).put("type", type).put("value", value)
+    private fun attr(type: String, value: Any) =
+        JSONObject().put("type", type).put("value", value)
 
+    /** SDK 1.x flat row: `$`-prefixed system fields, `$attributes` as a name -> {type, value} map. */
     private fun row(owner: String, gateChain: Int?, payloadJson: String): JSONObject {
-        val attrs = JSONArray()
-            .put(attr("title", "str", "scoped"))
-            .put(attr("mime", "i32", 1))
+        val attrs = JSONObject()
+            .put("title", attr("str", "scoped"))
+            .put("mime", attr("i32", 1))
         if (gateChain != null) {
             attrs
-                .put(attr("gate_chain", "i32", gateChain))
-                .put(attr("gate_token", "str", "0xF23a728b55BE576c75D98A8032982F85cBAD493E"))
-                .put(attr("gate_threshold", "i32", 1))
+                .put("gate_chain", attr("i32", gateChain))
+                .put("gate_token", attr("str", "0xF23a728b55BE576c75D98A8032982F85cBAD493E"))
+                .put("gate_threshold", attr("i32", 1))
         }
         return JSONObject()
-            .put("key", "0x" + "ab".repeat(32))
-            .put("owner", owner)
-            .put("creator", owner)
-            .put("createdAt", "0x9b877")
-            .put("expiresAt", "0x1c2d77")
-            .put("contentType", "application/json")
+            .put("\$key", "0x" + "ab".repeat(32))
+            .put("\$owner", owner)
+            .put("\$creator", owner)
+            .put("\$createdAt", "0x9b877")
+            .put("\$expiresAt", "0x1c2d77")
+            .put("content_type", "application/json")
             .put("payload", hexPayload(payloadJson))
-            .put("attributes", attrs)
+            .put("\$attributes", attrs)
     }
 
     private fun payload() = JSONObject()
