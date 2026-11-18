@@ -14,9 +14,7 @@ import haven.mobile.core.domain.TokenGate
 import haven.mobile.core.domain.TokenStandard
 import haven.mobile.core.domain.error.HavenError
 import haven.mobile.core.arkiv.ArkivClient
-import haven.mobile.core.arkiv.ArkivPage
 import haven.mobile.core.cache.HavenCache
-import haven.mobile.core.collections.CollectionRepository
 import haven.mobile.core.collections.GateAccessChecker
 import haven.mobile.core.collections.gateKeyOrNull
 import haven.mobile.core.wallet.WalletSession
@@ -42,14 +40,6 @@ class MediaRepositoryImpl @Inject constructor(
     private val arkivClient: ArkivClient,
     private val havenCache: HavenCache,
     private val settingsRepository: SettingsRepository,
-    /**
-     * Where the reader's communities actually come from: what the wallet holds.
-     *
-     * Arkiv's `discoverUserCommunities` derives gates from entities you *own*, which is the publisher's
-     * view — useless to a reader who has published nothing. The access check answers the question that
-     * matters instead.
-     */
-    private val collectionRepository: CollectionRepository,
     /** Intersects Arkiv's stored gate conditions with the wallet's balances across the enabled chains. */
     private val gateAccessChecker: GateAccessChecker,
 ) : MediaRepository {
@@ -92,11 +82,6 @@ class MediaRepositoryImpl @Inject constructor(
             File(dbDir, legacy.name + "-wal").renameTo(File(dbDir, canonicalName + "-wal"))
             File(dbDir, legacy.name + "-shm").renameTo(File(dbDir, canonicalName + "-shm"))
         }
-    }
-
-    private companion object {
-        /** Matches the web dApp's page size so paging behaviour stays comparable. */
-        const val PAGE_SIZE = 20
     }
 
     override fun observeLibrary(owner: String): Flow<List<MediaItem>> {
@@ -165,10 +150,10 @@ class MediaRepositoryImpl @Inject constructor(
                 val chains = settingsRepository.enabledChains.first()
                     .ifEmpty { HavenChain.mainnets.toSet() }
 
-                // Every Arkiv call below degrades to empty on failure (partial success is
-                // success), but the failures are collected: if NOTHING comes back and every
-                // call errored, that is an outage, not an empty library, and returning
-                // success renders a lie the user cannot distinguish from "holds nothing".
+                // Every Arkiv call below degrades to empty (partial success is success), but the
+                // failures are collected: if NOTHING comes back and every call errored, that is an
+                // outage, not an empty library, and returning success renders a lie the user cannot
+                // distinguish from "holds nothing".
                 val failures = mutableListOf<Throwable>()
                 fun <T> Result<T>.orEmptyLogged(source: String, default: T): T {
                     exceptionOrNull()?.let {
@@ -178,105 +163,87 @@ class MediaRepositoryImpl @Inject constructor(
                     return getOrDefault(default)
                 }
 
+                // ── The whole archive, read once ──────────────────────────────────────────────
+                // One paged walk of every Haven media group is the entire right-hand side of the
+                // intersection. The gates, the wallet's own uploads and each community's media all
+                // fall out of it locally — instead of a scan to discover gates, then one re-query per
+                // gate for rows the scan had already returned, then a separate owner lookup.
+                //
+                // The scan is now the only media source, so a scan failure is a hard outage: there is
+                // no per-gate query left to fall back on, and degrading it to empty would render a
+                // network blip as "you hold nothing".
+                val scan = arkivClient.scanCatalog().getOrElse { error ->
+                    Timber.w(error, "refreshAccessible: scanCatalog failed")
+                    return@withContext Result.failure(error)
+                }
+
                 // ── The intersection ──────────────────────────────────────────────────────────
                 // Arkiv stores what every archive requires; the wallet's balances say what it has.
-                // What overlaps is what this reader can open. Neither side is authoritative alone:
-                // holdings without conditions is a wallet inventory, conditions without holdings is a
-                // catalogue.
-                val candidateGates = buildList {
-                    addAll(arkivClient.discoverGates(chains).orEmptyLogged("discoverGates", emptyList()))
-                    // Live-only on both sides (no bundled seed): belt-and-braces for when the
-                    // index is reachable from one call site but not the other.
-                    addAll(collectionRepository.accessibleGates(chains))
-                    // Gates this wallet has published under. A creator keeps access to their own
-                    // community even if the index cannot be reached.
-                    addAll(
-                        arkivClient.discoverUserCommunities(walletAddress)
-                            .orEmptyLogged("discoverUserCommunities", emptyList())
-                            .map { it.gate },
-                    )
-                }.distinctBy { gate ->
-                    "${HavenChain.parse(gate.chain)?.aolVariant}:${gate.tokenAddress.lowercase()}"
-                }
+                // What overlaps is what this reader can open. Candidate gates are those the scan saw
+                // on live media, plus any derived from entities this wallet published under — the
+                // publisher path, which keeps a creator's access even when a gate's media has since
+                // expired out of the scan. Distinct by (chain, contract); the lowest threshold is the
+                // one that decides whether anything under it is readable.
+                val ownCommunityGates = arkivClient.discoverUserCommunities(walletAddress)
+                    .orEmptyLogged("discoverUserCommunities", emptyList())
+                    .map { it.gate }
+                val candidateGates = (scan.items.mapNotNull { it.gate } + ownCommunityGates)
+                    .filter { HavenChain.parse(it.chain) in chains }
+                    .groupBy { it.gateKeyOrNull() }
+                    .mapNotNull { (_, group) -> group.minByOrNull { it.threshold } }
 
                 val satisfiedKeys = if (candidateGates.isEmpty()) {
                     emptySet()
                 } else {
                     gateAccessChecker.satisfied(walletAddress, candidateGates, chains)
                 }
-                val openable = candidateGates.filter { it.gateKeyOrNull() in satisfiedKeys }
+                val openableKeys = candidateGates
+                    .filter { it.gateKeyOrNull() in satisfiedKeys }
+                    .mapNotNull { it.gateKeyOrNull() }
+                    .toSet()
 
-                // ── Own uploads ───────────────────────────────────────────────────────────────
-                // A creator sees their own work regardless of what they hold: they published it, and
-                // they may well have moved the gating asset on since.
-                val ownItems = arkivClient.listMediaForOwner(walletAddress, PAGE_SIZE, null)
-                    .orEmptyLogged("listMediaForOwner", null)
-                    ?.items
-                    .orEmpty()
+                // ── What this wallet can open, plus its own uploads ───────────────────────────
+                // A creator sees their own work regardless of what they hold. Both are read out of
+                // the one scan: own uploads are the rows this wallet owns, and — unlike the old
+                // single-page `listMediaForOwner` — that is the whole history, not the first 20.
+                val accessible = scan.items.filter { item ->
+                    item.owner.equals(walletAddress, ignoreCase = true) ||
+                        item.gate?.gateKeyOrNull() in openableKeys
+                }.distinctBy { it.id }
 
-                if (openable.isEmpty() && ownItems.isEmpty()) {
+                if (openableKeys.isEmpty() && accessible.isEmpty()) {
                     // Nothing to fetch is not a failure: a wallet that holds nothing yet has an empty
                     // library, and the Communities screen is where that gets fixed. But nothing
                     // fetched BECAUSE every call errored is an outage — fail with the first cause
                     // so the screen says "couldn't reach" instead of rendering fake-empty.
-                    unreachableCauseOrNull(openable.size, ownItems.size, failures)?.let {
+                    unreachableCauseOrNull(openableKeys.size, accessible.size, failures)?.let {
                         return@withContext Result.failure(it)
                     }
-                    // A clean refresh that finds nothing accessible means access
-                    // was sold/revoked (or never held): prune the mirror so the
-                    // library does not keep listing content that will only fail
-                    // at decrypt time.
-                    if (failures.isEmpty()) getDatabase().mediaDao().deleteAll()
+                    // A clean, complete refresh that finds nothing accessible means access was
+                    // sold/revoked (or never held): prune the mirror so the library does not keep
+                    // listing content that will only fail at decrypt time.
+                    if (failures.isEmpty() && scan.complete) getDatabase().mediaDao().deleteAll()
                     return@withContext Result.success(Unit)
                 }
 
-                var reached = 0
-                var lastFailure: Throwable? = null
-                val fetchedIds = mutableSetOf<String>()
+                // Exact creation dates, resolved only for what is actually shown: the scan leaves
+                // them on epoch, and one block-header lookup per distinct block is spent here rather
+                // than on the whole catalogue.
+                val resolved = arkivClient.resolveCreatedAt(accessible)
+                persist(resolved, walletAddress)
 
-                if (ownItems.isNotEmpty()) {
-                    persist(ownItems, walletAddress)
-                    fetchedIds += ownItems.map { it.id }
-                    reached++
-                }
-
-                openable.forEach { gate ->
-                    var cursor: String? = null
-                    do {
-                        val page = arkivClient.listMediaForCommunity(
-                            gate = gate,
-                            pageSize = PAGE_SIZE,
-                            cursor = cursor,
-                        ).getOrElse { throwable ->
-                            lastFailure = throwable
-                            return@forEach
-                        }
-
-                        persist(page.items, walletAddress)
-                        fetchedIds += page.items.map { it.id }
-                        cursor = page.nextCursor
-                    } while (cursor != null)
-                    reached++
-                }
-
-                if (reached == 0 && lastFailure != null) {
-                    Timber.w(lastFailure, "refreshAccessible: all community pages failed")
-                    Result.failure(lastFailure!!)
-                } else {
-                    lastFailure?.let { Timber.w(it, "refreshAccessible: some community pages failed") }
-                    // Prune only on a fully clean refresh: any failure leaves the
-                    // old mirror intact rather than mistaking an outage for
-                    // revoked access.
-                    if (failures.isEmpty() && lastFailure == null) {
-                        val dao = getDatabase().mediaDao()
-                        val stale = staleMirrorIds(dao.getAllIds(), fetchedIds)
-                        if (stale.isNotEmpty()) {
-                            dao.deleteByIds(stale)
-                            getDatabase().chapterDao().deleteForAlbums(stale)
-                        }
+                // Prune only on a fully clean, complete refresh: any failure, or a scan that hit its
+                // page cap (an incomplete view of the catalogue), leaves the old mirror intact rather
+                // than mistaking a partial read for revoked access.
+                if (failures.isEmpty() && scan.complete) {
+                    val dao = getDatabase().mediaDao()
+                    val stale = staleMirrorIds(dao.getAllIds(), resolved.map { it.id })
+                    if (stale.isNotEmpty()) {
+                        dao.deleteByIds(stale)
+                        getDatabase().chapterDao().deleteForAlbums(stale)
                     }
-                    Result.success(Unit)
                 }
+                Result.success(Unit)
             } catch (e: HavenError) {
                 Result.failure(e)
             } catch (e: Exception) {

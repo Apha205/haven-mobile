@@ -37,20 +37,30 @@ import haven.mobile.core.domain.TokenStandard
 import haven.mobile.core.domain.error.HavenError
 
 /**
- * Haven groups that carry gate attributes (see dapp `arkiv-publish`). Audio has its
- * own `haven.audio.full` generic-file group — an audio-only community's gate lives
- * solely on those rows, so leaving them out hides the whole DAO from discovery.
- * Flat `OR` chain exactly like the SDK renders `or(...)` — the language has no
- * `||`, and parenthesised groups are untested against the node, so none are used.
- * Internal so the discovery scan it drives pins without touching the network.
+ * Haven groups that carry media and, with it, gate attributes (see dapp `arkiv-publish`). Every
+ * group a writer publishes gated or clear media to is listed, because a community's gate lives on
+ * its media rows: leaving a group out hides that whole DAO from discovery and drops its items from
+ * a single-scan refresh.
+ *
+ *  - `haven.video.full` — video; `haven.audio.full` — audio (its own generic-file group since v2.2.0).
+ *  - `haven.video.drip.series` / `haven.video.drip.part` — drip launches (series header + parts).
+ *  - `haven.image.full`, `haven.text.full`, `haven.file.full` — the generic-file groups; a gated
+ *    image, document or file carries the same `gate_*` corpus a video does, and
+ *    `listMediaForCommunity` (which filters on the gate alone) returns it.
+ *
+ * Flat `OR` chain exactly like the SDK renders `or(...)` — the language has no `||`, and
+ * parenthesised groups are untested against the node, so none are used. Internal so the discovery
+ * scan it drives pins without touching the network.
  */
 internal const val HAVEN_GROUPS_QUERY =
-    "grp = str('haven.video.full') OR grp = str('haven.video.drip.series') OR grp = str('haven.video.drip.part') OR grp = str('haven.audio.full')"
+    "grp = str('haven.video.full') OR grp = str('haven.video.drip.series') OR grp = str('haven.video.drip.part') OR grp = str('haven.audio.full') OR grp = str('haven.image.full') OR grp = str('haven.text.full') OR grp = str('haven.file.full')"
 
 @Singleton
 class ArkivClientImpl @Inject constructor(
     private val config: ArkivConfig,
     private val focNetworkSource: FocNetworkSource = FocNetworkSource.Automatic,
+    /** Spends the Arkiv read budget for every `arkiv_query`; see [ArkivCallGate]. */
+    private val callGate: ArkivCallGate = ArkivCallGate(),
 ) : ArkivClient {
 
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
@@ -106,11 +116,23 @@ class ArkivClientImpl @Inject constructor(
      * they arrive inside the `attributes` array rather than as selectable columns — the node
      * rejects them as `select` keys.
      */
-    private fun arkivQuery(query: String, limit: Int, cursor: String?): JSONObject {
+    private fun arkivQuery(query: String, limit: Int, cursor: String?): JSONObject =
+        callGate.call("q:$limit:${cursor.orEmpty()}:$query") { arkivQueryUngated(query, limit, cursor) }
+
+    private fun arkivQueryUngated(query: String, limit: Int, cursor: String?): JSONObject {
         val body = buildArkivQueryBody(query, limit, cursor)
             .toString()
             .toRequestBody("application/json".toMediaType())
         httpClient.newCall(Request.Builder().url(config.endpointUrl).post(body).build()).execute().use { response ->
+            // Feed the budget layer before reading the body: a 429 or a high quota reading starts a
+            // cooldown so the next call fails fast instead of spending more of the hour's budget.
+            callGate.noteResponse(
+                httpCode = response.code,
+                retryAfterSeconds = response.header("Retry-After")?.trim()?.toLongOrNull(),
+                quotaUsedPercent = (response.header("Arkiv-Quota-Used-Percent") ?: response.header("X-Quota-Used-Percent"))
+                    ?.trim()?.toDoubleOrNull()?.toInt(),
+            )
+            if (response.code == 429) throw callGate.rateLimited()
             if (!response.isSuccessful) {
                 throw HavenError.NetworkError("Arkiv query failed (${response.code}).")
             }
@@ -122,12 +144,21 @@ class ArkivClientImpl @Inject constructor(
             // "unreadable" hid the one message that says what happened.
             val error = envelope.optJSONObject("error")
             if (error != null) {
-                throw HavenError.NetworkError("Arkiv rejected the query (${error.optString("message")}).")
+                val message = error.optString("message")
+                if (isRateLimitMessage(message)) {
+                    callGate.noteRateLimited()
+                    throw callGate.rateLimited()
+                }
+                throw HavenError.NetworkError("Arkiv rejected the query ($message).")
             }
             return envelope.optJSONObject("result")
                 ?: throw HavenError.NetworkError("Arkiv query came back unreadable.")
         }
     }
+
+    /** The node's body-level spellings of "over quota" when it refuses inside a 200 envelope. */
+    internal fun isRateLimitMessage(message: String): Boolean =
+        Regex("\\b429\\b").containsMatchIn(message) || message.contains("ANON_COST_LIMITED")
 
     /**
      * The `arkiv_query` JSON-RPC envelope, built exactly as `@arkiv-network/sdk` 1.x sends it.
@@ -381,10 +412,9 @@ class ArkivClientImpl @Inject constructor(
      * with [createdAt][MediaItem.createdAt] on epoch meaning "unknown". The block header holds
      * the real time, one `eth_getBlockByNumber` per distinct block: those resolve here, in
      * parallel, through the session cache. Anything unresolvable keeps epoch and still renders
-     * "Unknown date" — a failed lookup degrades the label, never the listing. Internal so the
-     * no-network pass-through pins.
+     * "Unknown date" — a failed lookup degrades the label, never the listing.
      */
-    internal suspend fun resolveCreatedAt(items: List<MediaItem>): List<MediaItem> {
+    override suspend fun resolveCreatedAt(items: List<MediaItem>): List<MediaItem> {
         val missing = items
             .filter { it.createdAt == EPOCH }
             .mapNotNull { it.createdAtBlock?.takeIf { block -> block > 0 } }
@@ -682,6 +712,66 @@ class ArkivClientImpl @Inject constructor(
             } catch (e: Exception) {
                 Result.failure(networkError("getMedia", e))
             }
+        }
+    }
+
+    override suspend fun scanCatalog(maxPages: Int): Result<ArkivScan<MediaItem>> {
+        notConfigured<ArkivScan<MediaItem>>()?.let { return it }
+        return withContext(Dispatchers.IO) {
+            try {
+                // The whole catalogue in one paged walk of the Haven groups (see HAVEN_GROUPS_QUERY).
+                // Rows are kept raw until the end so drip PARTs can be joined to their SERIES header.
+                val rows = mutableListOf<JSONObject>()
+                var head: Long? = null
+                var cursor: String? = null
+                var pages = 0
+                do {
+                    val (items, next, pageHead) = queryPage(HAVEN_GROUPS_QUERY, SCAN_PAGE_SIZE, cursor)
+                    rows += items
+                    if (pageHead != null) head = pageHead
+                    cursor = next
+                    pages++
+                } while (cursor != null && pages < maxPages)
+                Result.success(
+                    ArkivScan(
+                        items = catalogItems(rows, head),
+                        headBlock = head,
+                        complete = cursor == null,
+                        pages = pages,
+                    ),
+                )
+            } catch (e: HavenError) {
+                Result.failure(e)
+            } catch (e: Exception) {
+                Result.failure(networkError("scanCatalog", e))
+            }
+        }
+    }
+
+    /**
+     * Scan rows -> playable catalogue entries. Series headers are not media and are only used to
+     * give their parts a title and a gate; a part whose header is missing keeps what it has.
+     * Unparsable and expired rows are skipped. Internal so the join pins without the network.
+     */
+    internal fun catalogItems(rows: List<JSONObject>, headBlock: Long?): List<MediaItem> {
+        val seriesById = rows
+            .filter { it.optString("grp", null) == DRIP_SERIES_GROUP }
+            .mapNotNull { row -> row.firstString("drip_id")?.let { it to row } }
+            .toMap()
+        return rows.mapNotNull { row ->
+            val group = row.optString("grp", null)
+            if (group == DRIP_SERIES_GROUP) return@mapNotNull null
+            val item = runCatching { row.toMediaItem() }.getOrNull() ?: return@mapNotNull null
+            if (item.id.isEmpty() || isExpired(item.expiresAtBlock, headBlock)) return@mapNotNull null
+            if (group != DRIP_PART_GROUP) return@mapNotNull item
+            val series = row.firstString("drip_id")?.let { seriesById[it] } ?: return@mapNotNull item
+            val part = (row.firstIndex("drip_idx") ?: 0) + 1
+            val seriesTitle = series.firstString("title")
+            item.copy(
+                title = seriesTitle?.let { "$it — part $part" } ?: item.title,
+                gate = item.gate ?: series.toTokenGate(),
+                creatorHandle = item.creatorHandle ?: series.payloadField("creator"),
+            )
         }
     }
 

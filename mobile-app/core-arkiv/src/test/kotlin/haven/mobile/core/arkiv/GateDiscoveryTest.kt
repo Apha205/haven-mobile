@@ -52,10 +52,20 @@ class GateDiscoveryTest {
     }
 
     @Test
-    fun `discovery scan covers every Haven group including audio`() {
-        // An audio-only community's gate lives solely on haven.audio.full rows —
-        // dropping the group from the scan hides the whole DAO from discovery.
-        for (group in listOf("haven.video.full", "haven.video.drip.series", "haven.video.drip.part", "haven.audio.full")) {
+    fun `discovery scan covers every media-bearing Haven group`() {
+        // A community's gate lives on its media rows, and media is published to video, audio, drip
+        // and the generic-file groups (image/text/file). Dropping any of them from the scan hides
+        // that whole DAO from discovery and drops its items from a single-scan refresh — an
+        // audio-only, image-only or file-only community must still be found.
+        for (group in listOf(
+            "haven.video.full",
+            "haven.video.drip.series",
+            "haven.video.drip.part",
+            "haven.audio.full",
+            "haven.image.full",
+            "haven.text.full",
+            "haven.file.full",
+        )) {
             assertTrue(HAVEN_GROUPS_QUERY.contains("grp = str('$group')"), "scan misses $group")
         }
     }

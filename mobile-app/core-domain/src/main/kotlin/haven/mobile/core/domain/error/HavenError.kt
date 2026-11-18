@@ -78,6 +78,17 @@ sealed class HavenError(
         override val cause: Throwable? = null
     ) : HavenError("NETWORK_ERROR", message, cause)
 
+    /**
+     * The Arkiv index refused reads for now — HTTP 429, or the quota header crossed its limit.
+     * [retryAtEpochMillis] is when reads may resume; the budget layer sets a cooldown so callers
+     * fail fast instead of hammering the endpoint.
+     */
+    class RateLimited(
+        val retryAtEpochMillis: Long,
+        override val message: String = "Haven's index is busy right now; try again shortly.",
+        override val cause: Throwable? = null
+    ) : HavenError("RATE_LIMITED", message, cause)
+
     // Mirrors canister call error from cache-errors.ts
     class CanisterCallFailed(
         override val message: String,

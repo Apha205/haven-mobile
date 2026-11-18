@@ -58,4 +58,28 @@ interface ArkivClient {
     suspend fun listLaunches(): Result<List<LaunchStage>>
 
     suspend fun getMedia(id: String): Result<MediaItem?>
+
+    /**
+     * Every live media record on Arkiv, read in one walk.
+     *
+     * The same listing [discoverGates] pages to collect gate conditions, returned whole instead of
+     * reduced to gates. One walk answers what would otherwise be a gate scan, a page loop per gate
+     * and a lookup per uploader: the caller derives the gates, each community's archive, each
+     * uploader's uploads and the feed from this one result.
+     *
+     * Differences from the per-gate listings: expired records are dropped, and drip PARTs are joined
+     * to their SERIES header for a title and a gate. [MediaItem.createdAt] is left unresolved (epoch)
+     * — resolve it for just the items a caller keeps with [resolveCreatedAt], so a scan never pays a
+     * block-header lookup per record in the whole catalogue.
+     */
+    suspend fun scanCatalog(maxPages: Int = 200): Result<ArkivScan<MediaItem>>
+
+    /**
+     * Fill in wall-clock [MediaItem.createdAt] from the chain for [items].
+     *
+     * 2.0 entities carry only a creation block, so items parse with [MediaItem.createdAt] on epoch
+     * meaning "unknown". The block header holds the real time, one lookup per distinct block through
+     * the session cache; anything unresolvable keeps epoch and still renders "Unknown date".
+     */
+    suspend fun resolveCreatedAt(items: List<MediaItem>): List<MediaItem>
 }
