@@ -34,6 +34,8 @@ androidx-media3 = { module = "androidx.media3:media3-exoplayer", version.ref = "
 androidx-media3-common = { module = "androidx.media3:media3-common", version.ref = "media3" }
 # ByteArrayDataSource: feeds decrypted bytes to ExoPlayer without a temp file (FR-UI-5).
 androidx-media3-datasource = { module = "androidx.media3:media3-datasource", version.ref = "media3" }
+# Bundled libvorbis: Vorbis-in-OGG has no platform decoder on many devices.
+androidx-media3-decoder-vorbis = { module = "androidx.media3:media3-decoder-vorbis", version.ref = "media3" }
 # MediaSessionService: keeps audio playing when the app is backgrounded, and gives the system its
 # notification and lockscreen controls.
 androidx-media3-session = { module = "androidx.media3:media3-session", version.ref = "media3" }
