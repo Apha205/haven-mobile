@@ -30,8 +30,6 @@ dependencies {
     implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.ui)
-    // Bundled libvorbis: Vorbis-in-OGG has no platform decoder on many devices.
-    implementation(libs.androidx.media3.decoder.vorbis)
     // No image loader: viewers decode from the staged plaintext file with inSampleSize downsampling,
     // and Coil's value is a URL + disk cache — neither applies to local decrypted content.
     // DOCUMENT uses the platform android.graphics.pdf.PdfRenderer (see PdfDocument.kt) rather than
