@@ -31,6 +31,20 @@ the APK and uploads it. Order matters — follow it exactly.
    gh release view "v0.1.N-$SHA" --json assets --jq '.assets[] | .name'
    ```
 
+## APK variants
+
+The `android` workflow uploads two artifacts:
+
+|Name|What|
+|-|-|
+|`app-debug`|Universal debug APK: every ABI in one file. This is the one attached to the release.|
+|`app-debug-x86_64`|x86_64-only debug APK, for an Android emulator or a ChromeOS device. Same code, only the packaged ABI differs.|
+
+The x86_64 artifact is built with `./gradlew :app:assembleDebug -Pabi=x86_64`
+(`-Pabi=arm64-v8a,x86_64` builds one APK per ABI); without `-Pabi` the APK
+stays universal. It is the same build with fewer packaged ABIs, so the
+x86_64 emulator startup job that gates `app-debug` covers it too.
+
 ## Why this order
 
 - `gh release create` mints its own **unsigned** tag if the name doesn't exist
