@@ -30,6 +30,10 @@ dependencies {
     implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.ui)
+    // FFmpeg software decoders (Vorbis/Opus/FLAC...) for devices without a platform
+    // decoder. Wired via NextRenderersFactory in HavenPlaybackService with extension
+    // renderers ON, so platform MediaCodec decoders still win when available.
+    implementation(libs.nextlib.media3ext)
     // No image loader: viewers decode from the staged plaintext file with inSampleSize downsampling,
     // and Coil's value is a URL + disk cache — neither applies to local decrypted content.
     // DOCUMENT uses the platform android.graphics.pdf.PdfRenderer (see PdfDocument.kt) rather than
